@@ -1,0 +1,36 @@
+<!doctype html>
+<!--
+  index.html — Judo Canon: a static study site for the Kodokan's 100 techniques.
+  Hosted on GitHub Pages (0xcasuwu/judo-canon), no build step: ES modules load directly.
+  Views are hash-routed by js/app.js: #/ (path), #/browse, #/t/<id>, #/cards, #/quiz, #/decode.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Judo Canon</title>
+  <meta name="description" content="Learn all 100 Kodokan judo techniques — instructionals, competition footage, flashcards and quizzes.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='40' fill='%23c8102e'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Serif+JP:wght@500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href="#/"><span class="dot" aria-hidden="true"></span>Judo Canon <span class="brand-jp">講道館</span></a>
+    <nav id="nav">
+      <a href="#/">Path</a>
+      <a href="#/browse">Techniques</a>
+      <a href="#/cards">Flashcards</a>
+      <a href="#/quiz">Quiz</a>
+      <a href="#/decode">Decoder</a>
+    </nav>
+  </header>
+  <main id="app" tabindex="-1"></main>
+  <footer class="foot">
+    The Kodokan's 100 named techniques (Nage-waza 68 · Katame-waza 32). Video links open YouTube searches,
+    so they always point at current footage. Progress is saved in this browser only.
+  </footer>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
