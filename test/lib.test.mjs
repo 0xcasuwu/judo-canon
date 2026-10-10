@@ -132,3 +132,43 @@ test('progress roll-up', () => {
   assert.deepEqual(progress(['a', 'b', 'c', 'd'], srs), { total: 4, new: 2, learning: 1, mastered: 1, pct: 25 });
   assert.equal(GROUPS.flatMap(g => g.subs).length, 8);
 });
+
+// ── Lessons (courses.js) ────────────────────────────────────────────────────────
+import { COURSES } from '../js/courses.js';
+import { lessons, lessonCards, qaCardById, authoredQuiz, mentions } from '../js/lib.js';
+
+test('course data: technique refs exist, quiz answers valid, timestamps well-formed', () => {
+  assert.ok(lessons.length >= 5);
+  for (const l of lessons) {
+    for (const t of l.techniques) assert.ok(TECHNIQUES.some(x => x.id === t.id), `${l.id} → ${t.id}`);
+    for (const [q, choices, ci] of l.quiz) {
+      assert.ok(ci >= 0 && ci < choices.length, `${l.id}: ${q}`);
+      assert.equal(new Set(choices).size, choices.length, `${l.id}: dup choice in ${q}`);
+    }
+    for (const [ts] of l.points) assert.match(ts, /^\d{1,2}:\d{2}$/, `${l.id} ${ts}`);
+    assert.ok(l.cards.length >= 3 && l.summary.length > 50, l.id);
+  }
+  assert.equal(new Set(lessons.map(l => l.id)).size, lessons.length);
+  for (const c of COURSES) assert.deepEqual(c.lessons.map(l => l.n), [...c.lessons.map(l => l.n)].sort((a, b) => a - b), 'lessons in order');
+});
+
+test('lesson cards: stable unique ids that never collide with technique ids', () => {
+  const ids = lessons.flatMap(l => lessonCards(l).map(c => c.id));
+  assert.equal(new Set(ids).size, ids.length);
+  assert.ok(ids.every(id => !TECHNIQUES.some(t => t.id === id)));
+  assert.equal(qaCardById['ftf1-06:c0'].lesson, 'ftf1-06');
+});
+
+test('authored quiz: shuffled choices still contain the right answer once', () => {
+  const qs = authoredQuiz(lessons, 100, seeded(9));
+  assert.equal(qs.length, lessons.reduce((n, l) => n + l.quiz.length, 0));
+  assert.ok(qs.every(q => q.choices.filter(c => c === q.correct).length === 1));
+  assert.ok(qs.some(q => q.choices[0] !== q.correct), 'answers are not always first');
+});
+
+test('mentions cross-reference lessons from a canon technique', () => {
+  const m = mentions('tai-otoshi');
+  assert.ok(m.length >= 2 && m.every(x => x.note));
+  assert.ok(mentions('tomoe-nage').every(x => x.uncertain));
+  assert.deepEqual(mentions('kesa-gatame'), []);
+});

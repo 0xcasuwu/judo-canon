@@ -8,8 +8,10 @@
 //   SRS          — Leitner spaced repetition (boxes 0–5) for flashcards
 //   quiz         — multiple-choice question generation, 4 modes
 //   progress     — mastery roll-ups for the study path
+//   lessons      — flashcards, authored quizzes and canon cross-references from courses.js
 
 import { TECHNIQUES, VOCAB } from './data.js';
+import { COURSES } from './courses.js';
 
 // ── Links ──────────────────────────────────────────────────────────────────
 // Search URLs, never hard-coded video IDs: they cannot rot or point at a wrong video.
@@ -151,3 +153,25 @@ export function progress(ids, srs) {
 }
 
 export const byId = Object.fromEntries(TECHNIQUES.map(t => [t.id, t]));
+
+// ── Lessons (courses.js) ───────────────────────────────────────────────────────
+// Lesson flashcards share the SRS store with techniques; ids are `${lessonId}:c${i}`.
+
+export const lessons = COURSES.flatMap(c => c.lessons.map(l => ({ ...l, course: c })));
+export const lessonById = Object.fromEntries(lessons.map(l => [l.id, l]));
+
+export function lessonCards(lesson) {
+  return lesson.cards.map(([q, a], i) => ({ id: `${lesson.id}:c${i}`, q, a, lesson: lesson.id }));
+}
+export const qaCardById = Object.fromEntries(lessons.flatMap(lessonCards).map(c => [c.id, c]));
+
+// Authored questions store the right answer at an index; shuffle so it isn't always first.
+export function authoredQuiz(lessonList, n, rng) {
+  const all = lessonList.flatMap(l => l.quiz.map(([prompt, choices, ci]) => ({ id: l.id, mode: 'authored', prompt, choices, correct: choices[ci] })));
+  return shuffle(all, rng).slice(0, n).map(q => ({ ...q, choices: shuffle(q.choices, rng) }));
+}
+
+// Where a canon technique is discussed across the owner's lessons.
+export function mentions(techId) {
+  return lessons.flatMap(l => l.techniques.filter(t => t.id === techId).map(t => ({ lesson: l, note: t.note, uncertain: !!t.uncertain })));
+}

@@ -2,14 +2,17 @@
 // unit-tested); this file only renders state and wires events.
 //
 // ROUTES (hash): #/ path · #/browse · #/t/<id> · #/cards?set=<set> · #/quiz?set=<set> · #/decode
+//   · #/lessons · #/lesson/<id>  (study material derived from the owner's videos — see courses.js)
 // STORAGE: localStorage 'judo-canon:v1' = { srs: {id: card}, notes: {id: text} }. Per-browser
 //   by design (personal study progress); every access is try/catch'd so private mode still works.
 // SETS: named subsets (Gokyo 1–5, the two kata, families, everything) shared by the path,
-//   flashcards and quiz, so "study this set" is one link from anywhere.
+//   flashcards and quiz, so "study this set" is one link from anywhere. Lesson sets
+//   (`course:<id>`, `lesson:<id>`) are Q/A sets: authored cards and quiz questions, not generated.
 
 import { TECHNIQUES, GROUPS, GOKYO_SETS, KATA, VOCAB, GLOSSARY } from './data.js';
+import { COURSES, CONCEPTS } from './courses.js';
 import { links, decodeName, filter, review, statusOf, buildDeck, makeQuiz, QUIZ_MODES, progress,
-  byId, BOX_INTERVAL_DAYS, DAY } from './lib.js';
+  byId, BOX_INTERVAL_DAYS, DAY, lessonById, lessonCards, qaCardById, authoredQuiz, mentions } from './lib.js';
 
 // ── State ────────────────────────────────────────────────────────────────────
 const KEY = 'judo-canon:v1';
@@ -31,7 +34,12 @@ const SETS = [
   ...GROUPS[1].subs.map(s => ({ id: s.id, name: s.name, en: s.en, ids: idsWhere(t => t.sub === s.id) })),
   { id: 'all', name: 'The full canon', en: 'All 100 techniques', ids: TECHNIQUES.map(t => t.id) },
 ];
-const setById = id => SETS.find(s => s.id === id) ?? SETS.at(-1);
+const cardIds = ls => ls.flatMap(l => lessonCards(l).map(c => c.id));
+const LESSON_SETS = COURSES.flatMap(c => [
+  { id: `course:${c.id}`, name: c.title, en: `All lessons · ${c.instructor}`, ids: cardIds(c.lessons), qa: true, lessons: c.lessons, course: c },
+  ...c.lessons.map(l => ({ id: `lesson:${l.id}`, name: `Lesson ${l.n}`, en: l.title, ids: cardIds([l]), qa: true, lessons: [l], course: c })),
+]);
+const setById = id => SETS.find(s => s.id === id) ?? LESSON_SETS.find(s => s.id === id) ?? SETS.at(-1);
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const $app = document.getElementById('app');
@@ -45,8 +53,16 @@ const tags = t => [
   ...KATA.filter(k => k.members.includes(t.id)).map(k => `<span class="tag">${esc(k.name)}</span>`),
   t.banned ? '<span class="tag ban">Prohibited in IJF contest</span>' : '',
 ].join('');
-const setPicker = (cur, base) => `<div class="seg" role="group" aria-label="Choose a set">${SETS.map(s =>
-  `<a class="btn ${s.id === cur ? 'sel' : ''}" href="${base}?set=${s.id}">${esc(s.name)}</a>`).join('')}</div>`;
+// Technique sets plus each course; inside a course, its per-lesson sets as well.
+const setPicker = (cur, base) => {
+  const curSet = setById(cur);
+  const shown = curSet.qa ? LESSON_SETS.filter(s => s.course === curSet.course)
+    : [...SETS, ...LESSON_SETS.filter(s => s.id.startsWith('course:'))];
+  const back = curSet.qa ? `<a class="btn" href="${base}?set=all">← Techniques</a>` : '';
+  return `<div class="seg" role="group" aria-label="Choose a set">${back}${shown.map(s =>
+    `<a class="btn ${s.id === cur ? 'sel' : ''}" href="${base}?set=${s.id}">${esc(s.name)}</a>`).join('')}</div>`;
+};
+const lessonLink = l => `<a href="#/lesson/${l.id}">Lesson ${l.n} — ${esc(l.title)}</a>`;
 const fmtDue = ms => { const d = Math.round(ms / DAY); return d <= 0 ? 'soon' : d === 1 ? 'tomorrow' : `in ${d} days`; };
 
 // ── Views ────────────────────────────────────────────────────────────────────
@@ -146,6 +162,9 @@ function viewTechnique(id) {
         <p>${esc(t.desc)}</p>
         <p class="cue">${esc(t.cue)}</p>
         ${t.exponents.length ? `<p><b>Famous exponents:</b> ${t.exponents.map(esc).join(', ')}</p>` : ''}
+        ${mentions(t.id).length ? `<h2>From your lessons</h2>${mentions(t.id).map(m => `<div class="card mention">
+          <div class="muted" style="font-size:13px">${esc(m.lesson.course.title)} · ${lessonLink(m.lesson)}</div>
+          <p style="margin:6px 0 0">${esc(m.note)}${m.uncertain ? ' <span class="tag">name inferred from audio</span>' : ''}</p></div>`).join('')}` : ''}
         <h2>Your notes</h2>
         <textarea id="notes" rows="3" placeholder="Grips, setups, what your coach said…">${esc(state.notes[id] ?? '')}</textarea>
       </div>
@@ -184,6 +203,7 @@ function viewCards(setId) {
   const s = setById(setId);
   if (cards.set !== s.id) Object.assign(cards, { set: s.id, deck: buildDeck(s.ids, state.srs, Date.now()), flipped: false, done: 0 });
   const id = cards.deck[0];
+  if (s.qa) return viewQaCards(s, id);
   const head = `<h1>Flashcards</h1>
     <p class="lede">Spaced repetition: cards you know come back less often (1 → 3 → 7 → 16 → 35 days). Ten new cards per session.</p>
     ${setPicker(s.id, '#/cards')}
@@ -215,22 +235,48 @@ function viewCards(setId) {
   </div>`;
 }
 
+function viewQaCards(s, id) {
+  const head = `<h1>Flashcards</h1><p class="lede">${esc(s.course.title)} · ${esc(s.course.instructor)} — your notes as spaced-repetition cards.</p>
+    ${setPicker(s.id, '#/cards')}<div style="height:20px"></div>`;
+  if (!id) {
+    const p = progress(s.ids, state.srs);
+    return `${head}<div class="card fc flash"><div class="big">Done for now ✓</div>
+      <p class="muted">${cards.done} reviewed this session · ${p.mastered}/${p.total} mastered</p>
+      <div class="row"><a class="btn primary" href="#/quiz?set=${s.id}">Quiz these lessons</a><a class="btn" href="#/lessons">Back to lessons</a></div></div>`;
+  }
+  const c = qaCardById[id], l = lessonById[c.lesson];
+  const preview = g => { const r = review(state.srs[id], g, 0); return g === 'again' ? '1 min' : `${BOX_INTERVAL_DAYS[r.box]}d`; };
+  return `${head}<div class="flash">
+    <p class="muted">${cards.deck.length} left · Lesson ${l.n} · ${st(id)}</p>
+    <div class="card fc" id="fc">
+      <div class="big" style="font-size:clamp(20px,4.5vw,26px)">${esc(c.q)}</div>
+      ${cards.flipped ? `<div class="answer"><p style="font-size:17px">${esc(c.a)}</p>${lessonLink(l)}</div>`
+        : `<button class="btn primary" data-flip style="margin-top:18px">Show answer</button><span class="kbd">Space</span>`}
+    </div>
+    ${cards.flipped ? `<div class="grades">${['again', 'hard', 'good', 'easy'].map((g, i) =>
+      `<button class="btn ${g === 'good' ? 'primary' : ''}" data-rate="${g}">${g[0].toUpperCase() + g.slice(1)}<small>${preview(g)} · ${i + 1}</small></button>`).join('')}</div>` : ''}
+  </div>`;
+}
+
 const quiz = { set: null, mode: 'en-name', qs: [], i: 0, score: 0, picked: null, missed: [] };
 function startQuiz(setId) {
   const s = setById(setId);
-  const qs = makeQuiz(s.ids.map(i => byId[i]), quiz.mode, Math.min(10, s.ids.length), Math.random, TECHNIQUES);
+  const qs = s.qa ? authoredQuiz(s.lessons, 10, Math.random)
+    : makeQuiz(s.ids.map(i => byId[i]), quiz.mode, Math.min(10, s.ids.length), Math.random, TECHNIQUES);
   Object.assign(quiz, { set: s.id, qs, i: 0, score: 0, picked: null, missed: [] });
 }
 function viewQuiz(setId) {
   const s = setById(setId);
   if (quiz.set !== s.id) startQuiz(s.id);
   const head = `<h1>Quiz</h1>${setPicker(s.id, '#/quiz')}
-    <div class="seg" style="margin:10px 0 20px">${Object.entries(QUIZ_MODES).map(([k, m]) =>
-      `<button class="btn ${k === quiz.mode ? 'sel' : ''}" data-mode="${k}">${m.label}</button>`).join('')}</div>`;
+    ${s.qa ? '<div style="height:20px"></div>' : `<div class="seg" style="margin:10px 0 20px">${Object.entries(QUIZ_MODES).map(([k, m]) =>
+      `<button class="btn ${k === quiz.mode ? 'sel' : ''}" data-mode="${k}">${m.label}</button>`).join('')}</div>`}`;
+  const reviewChip = id => s.qa ? `<a class="chip" href="#/lesson/${id}">Lesson ${lessonById[id].n}</a>`
+    : `<a class="chip" href="#/t/${id}">${esc(byId[id].name)}</a>`;
   if (quiz.i >= quiz.qs.length) {
     return `${head}<div class="card flash"><h2 style="margin-top:0">${quiz.score} / ${quiz.qs.length}</h2>
-      ${quiz.missed.length ? `<p>Review these:</p><div class="chips">${quiz.missed.map(id =>
-        `<a class="chip" href="#/t/${id}">${esc(byId[id].name)}</a>`).join('')}</div>` : '<p>Perfect round. 一本!</p>'}
+      ${quiz.missed.length ? `<p>Review these:</p><div class="chips">${[...new Set(quiz.missed)].map(reviewChip).join('')}</div>`
+        : '<p>Perfect round. 一本!</p>'}
       <div class="row" style="margin-top:16px"><button class="btn primary" data-restart>New round</button>
       <a class="btn" href="#/cards?set=${s.id}">Flashcards for this set</a></div></div>`;
   }
@@ -244,7 +290,7 @@ function viewQuiz(setId) {
       return `<button class="choice ${cls}" data-choice="${i}" ${quiz.picked != null ? 'disabled' : ''}>${esc(show(c))}</button>`;
     }).join('')}</div>
     ${quiz.picked != null ? `<div class="row" style="margin-top:14px;justify-content:space-between">
-      <a href="#/t/${q.id}">${esc(byId[q.id].name)} — videos & details</a>
+      ${s.qa ? lessonLink(lessonById[q.id]) : `<a href="#/t/${q.id}">${esc(byId[q.id].name)} — videos & details</a>`}
       <button class="btn primary" data-next>${quiz.i + 1 < quiz.qs.length ? 'Next' : 'Finish'} →</button></div>` : ''}
   </div>`;
 }
@@ -262,6 +308,62 @@ function viewDecode() {
     <table class="gl">${GLOSSARY.map(([n, k, d]) => `<tr><td><b>${esc(n)}</b></td><td class="jp">${k}</td><td>${esc(d)}</td></tr>`).join('')}</table>`;
 }
 
+function viewLessons() {
+  return `<h1>Lessons</h1>
+    <p class="lede">Study guides built from instructionals you own: key points with timestamps (scrub your own copy),
+      frameworks, links into the canon, and lesson flashcards that share your spaced-repetition schedule.</p>
+    ${COURSES.map(c => {
+      const p = progress(cardIds(c.lessons), state.srs);
+      return `<div class="card" style="margin-bottom:16px">
+        <div class="row" style="justify-content:space-between"><div><h2 style="margin:0">${esc(c.title)}</h2>
+        <div class="muted">${esc(c.instructor)} · ${esc(c.publisher)} — ${esc(c.blurb)}</div></div>
+        <div class="row"><a class="btn primary" href="#/cards?set=course:${c.id}">Cards</a><a class="btn" href="#/quiz?set=course:${c.id}">Quiz</a></div></div>
+        <div style="margin:12px 0">${bar(p)}</div>
+        <div class="path">${c.lessons.map(l => {
+          const lp = progress(cardIds([l]), state.srs);
+          return `<a class="step" href="#/lesson/${l.id}" style="grid-template-columns:44px 1fr auto">
+            <div class="num">${lp.mastered === lp.total ? '✓' : l.n}</div>
+            <div><h3>${esc(l.title)}</h3><div class="meta">${l.dur} · ${l.points.length} key points · ${l.cards.length} cards · ${lp.mastered}/${lp.total} mastered</div></div>
+            <span class="muted">→</span></a>`;
+        }).join('')}</div>
+        ${c.missing.length ? `<p class="muted" style="font-size:13px">${c.missing.map(esc).join(' · ')}</p>` : ''}
+      </div>`;
+    }).join('')}
+    <h2>Concepts</h2>
+    <table class="gl">${CONCEPTS.map(([n, k, d]) => `<tr><td><b>${esc(n)}</b></td><td class="jp">${k}</td><td>${esc(d)}</td></tr>`).join('')}</table>`;
+}
+
+function viewLesson(id) {
+  const l = lessonById[id];
+  if (!l) return `<h1>Not found</h1><p><a href="#/lessons">Back to lessons</a></p>`;
+  const all = l.course.lessons, i = all.indexOf(l), prev = all[i - 1], next = all[i + 1];
+  return `
+    <div class="crumbs"><a href="#/lessons">Lessons</a> › ${esc(l.course.title)} › Lesson ${l.n}</div>
+    <h1>${esc(l.title)}</h1>
+    <p class="muted">${esc(l.course.instructor)} · ${l.dur}</p>
+    <p class="lede" style="color:var(--ink)">${esc(l.summary)}</p>
+    <div class="row"><a class="btn primary" href="#/cards?set=lesson:${l.id}">Study ${l.cards.length} cards</a>
+      <a class="btn" href="#/quiz?set=lesson:${l.id}">Quiz (${l.quiz.length})</a></div>
+    <div class="hero" style="margin-top:8px">
+      <div>
+        <h2>Key points</h2>
+        <ol class="points">${l.points.map(([t, txt]) => `<li><span class="ts">${t}</span>${esc(txt)}</li>`).join('')}</ol>
+      </div>
+      <aside>
+        ${l.frameworks.map(f => `<div class="card" style="margin-top:12px"><h3>${esc(f.title)}</h3>
+          <ol class="fw">${f.items.map(x => `<li>${esc(x)}</li>`).join('')}</ol></div>`).join('')}
+        ${l.techniques.length ? `<div class="card" style="margin-top:12px"><h3>Techniques in this lesson</h3>
+          <div class="links" style="margin-top:8px">${l.techniques.map(t => `<a class="link" href="#/t/${t.id}">
+            <span><b>${esc(byId[t.id].name)}</b>${t.uncertain ? ' <span class="tag">inferred</span>' : ''}<br>
+            <span class="muted" style="font-size:13px">${esc(t.note)}</span></span></a>`).join('')}</div></div>` : ''}
+      </aside>
+    </div>
+    <div class="pager">
+      ${prev ? `<a class="btn" href="#/lesson/${prev.id}">← Lesson ${prev.n}</a>` : '<span></span>'}
+      ${next ? `<a class="btn" href="#/lesson/${next.id}">Lesson ${next.n} →</a>` : ''}
+    </div>`;
+}
+
 // ── Router ───────────────────────────────────────────────────────────────────
 function route() {
   const [path, qs] = (location.hash.slice(1) || '/').split('?');
@@ -274,10 +376,12 @@ function route() {
   else if (top === 'cards') html = viewCards(params.get('set'));
   else if (top === 'quiz') html = viewQuiz(params.get('set'));
   else if (top === 'decode') html = viewDecode();
+  else if (top === 'lessons') html = viewLessons();
+  else if (top === 'lesson') html = viewLesson(parts[1]);
   else html = viewPath();
   $app.innerHTML = html;
   if (top === 'browse') renderResults();
-  const navKey = top === 't' ? 'browse' : top;
+  const navKey = top === 't' ? 'browse' : top === 'lesson' ? 'lessons' : top;
   for (const a of document.querySelectorAll('#nav a')) {
     if (a.getAttribute('href') === `#/${navKey}`) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
   }

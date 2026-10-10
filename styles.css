@@ -139,3 +139,10 @@ input[type="search"], select, textarea { width: 100%; padding: 10px 12px; border
 .vocab b { font-weight: 600; }
 table.gl { width: 100%; border-collapse: collapse; font-size: 14px; }
 table.gl td { padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+
+/* Lessons */
+.points { padding-left: 0; list-style: none; display: grid; gap: 10px; }
+.points li { display: grid; grid-template-columns: 56px 1fr; gap: 10px; align-items: baseline; }
+.ts { font: 600 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--accent); background: var(--surface-2); border-radius: 6px; text-align: center; padding: 1px 0; }
+.fw { margin: 8px 0 0; padding-left: 20px; display: grid; gap: 4px; font-size: 14px; }
+.mention { margin-bottom: 8px; padding: 12px 14px; }
